@@ -33,7 +33,9 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <cassert>
+#include <memory>
 #include <optional>
+#include <type_traits>
 #include <utility>
 
 using namespace clang;
@@ -1130,7 +1132,31 @@ ImplicitConceptSpecializationDecl::ImplicitConceptSpecializationDecl(
 ImplicitConceptSpecializationDecl::ImplicitConceptSpecializationDecl(
     EmptyShell Empty, unsigned NumTemplateArgs)
     : Decl(ImplicitConceptSpecialization, Empty),
-      NumTemplateArgs(NumTemplateArgs) {}
+      NumTemplateArgs(NumTemplateArgs) {
+  // NumTemplateArgs is published here, but the trailing arguments are not
+  // written until ASTDeclReader::VisitImplicitConceptSpecializationDecl calls
+  // setTemplateArguments(), and the decl is registered in the loaded-decls map
+  // before it is visited. Re-entrant deserialization can therefore reach this
+  // decl through a ConceptSpecializationExpr and call getTemplateArguments()
+  // in between. Value-initialize the storage so that such a read is at least
+  // well defined.
+  //
+  // FIXME: this makes the read defined, not correct: profiling a
+  // ConceptSpecializationExpr whose arguments have not been read yet still
+  // yields a FoldingSetNodeID that differs from the one computed for the same
+  // expression afterwards, so a FunctionProtoType uniqued off such a profile
+  // is mis-keyed. The real fix has to keep the profile from being computed
+  // over an incompletely deserialized decl at all.
+  //
+  // setTemplateArguments() later placement-news over this storage without
+  // destroying what is here, which is only sound for a trivially destructible
+  // type. It also has to keep using uninitialized_copy rather than assignment,
+  // because the other constructor calls it on genuinely raw storage.
+  static_assert(std::is_trivially_destructible_v<TemplateArgument>,
+                "TemplateArgument is value-initialized here and overwritten by "
+                "setTemplateArguments() without being destroyed");
+  std::uninitialized_value_construct_n(getTrailingObjects(), NumTemplateArgs);
+}
 
 ImplicitConceptSpecializationDecl *ImplicitConceptSpecializationDecl::Create(
     const ASTContext &C, DeclContext *DC, SourceLocation SL,
