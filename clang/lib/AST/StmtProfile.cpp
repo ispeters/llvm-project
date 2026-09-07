@@ -1779,7 +1779,24 @@ void StmtProfiler::VisitConceptSpecializationExpr(
                                            const ConceptSpecializationExpr *S) {
   VisitExpr(S);
   VisitTemplateName(S->getNamedConcept());
-  for (const TemplateArgument &Arg : S->getTemplateArguments())
+  ArrayRef<TemplateArgument> Args = S->getTemplateArguments();
+#ifndef NDEBUG
+  // ImplicitConceptSpecializationDecl::CreateDeserialized() value-initializes
+  // the trailing arguments, so an argument list that has not been written yet
+  // reads as Null in every position; a converted concept-id argument is never
+  // Null. Report it so that ASTContext::getFunctionTypeInternal() can assert
+  // that the resulting FoldingSetNodeID never participates in type identity.
+  //
+  // An unwritten list is Null in every position, so require all of them rather
+  // than just the first: a well-formed converted list would have to be Null
+  // throughout to be mistaken for one. The empty check is load-bearing --
+  // all_of is vacuously true on an empty range, and a zero-argument decl has
+  // nothing unwritten to observe.
+  if (!Args.empty() &&
+      llvm::all_of(Args, [](const TemplateArgument &A) { return A.isNull(); }))
+    ASTContext::noteUnwrittenConceptArgumentRead();
+#endif
+  for (const TemplateArgument &Arg : Args)
     VisitTemplateArgument(Arg);
 }
 

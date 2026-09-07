@@ -1489,6 +1489,22 @@ public:
   ASTMutationListener *getASTMutationListener() const { return Listener; }
 
   void PrintStats() const;
+
+  /// \name Provisional type key detection
+  /// Deserialization publishes an ImplicitConceptSpecializationDecl's argument
+  /// count before its trailing arguments are written, so a re-entrant read can
+  /// observe them unwritten -- see the FIXME in that class's EmptyShell
+  /// constructor. StmtProfiler reports such a read here, and
+  /// getFunctionTypeInternal() uses the count to assert that a FoldingSetNodeID
+  /// computed from one never participates in type identity.
+  ///
+  /// These are declared and defined unconditionally so that the symbols exist
+  /// regardless of how this library was configured; the callers are what is
+  /// compiled out when assertions are off, and the bodies are then empty.
+  /// @{
+  static void noteUnwrittenConceptArgumentRead();
+  static unsigned long getUnwrittenConceptArgumentReadCount();
+  /// @}
   const SmallVectorImpl<Type *>& getTypes() const { return Types; }
 
   BuiltinTemplateDecl *buildBuiltinTemplateDecl(BuiltinTemplateKind BTK,

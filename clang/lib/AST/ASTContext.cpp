@@ -5061,6 +5061,58 @@ static bool isCanonicalExceptionSpecification(
   return false;
 }
 
+#ifndef NDEBUG
+static unsigned long UnwrittenConceptArgumentReads = 0;
+#endif
+
+void ASTContext::noteUnwrittenConceptArgumentRead() {
+#ifndef NDEBUG
+  ++UnwrittenConceptArgumentReads;
+#endif
+}
+
+unsigned long ASTContext::getUnwrittenConceptArgumentReadCount() {
+#ifndef NDEBUG
+  return UnwrittenConceptArgumentReads;
+#else
+  return 0;
+#endif
+}
+
+namespace {
+/// Detects, in assertions builds, whether a FoldingSetNodeID was computed while
+/// an ImplicitConceptSpecializationDecl's trailing arguments were still
+/// unwritten. Such a "provisional" key does not describe the type it is filed
+/// under.
+///
+/// A provisional key is harmless when the lookup misses and the specification
+/// is EST_NoexceptTrue or EST_NoexceptFalse: their canonical form is
+/// EST_BasicNoexcept/EST_None, which does not profile the expression at all, so
+/// the resulting non-canonical FunctionProtoType's canonical type does not
+/// depend on the bad key and the node is reached by pointer from the AST
+/// thereafter. It is not harmless if the key hits (the non-canonical
+/// FunctionProtoType adopts the matched node's canonical type), if the node is
+/// its own canonical form (it is filed under a key no later derivation of the
+/// same type will compute), or if the specification is EST_DependentNoexcept
+/// (isCanonicalExceptionSpecification() accepts it, so the expression is
+/// profiled into the canonical type's key).
+class ProvisionalKeyWatch {
+#ifndef NDEBUG
+  unsigned long Before;
+
+public:
+  ProvisionalKeyWatch()
+      : Before(ASTContext::getUnwrittenConceptArgumentReadCount()) {}
+  bool isProvisional() const {
+    return ASTContext::getUnwrittenConceptArgumentReadCount() != Before;
+  }
+#else
+public:
+  bool isProvisional() const { return false; }
+#endif
+};
+} // namespace
+
 QualType ASTContext::getFunctionTypeInternal(
     QualType ResultTy, ArrayRef<QualType> ArgArray,
     const FunctionProtoType::ExtProtoInfo &EPI, bool OnlyWantCanonical) const {
@@ -5069,14 +5121,26 @@ QualType ASTContext::getFunctionTypeInternal(
   // Unique functions, to guarantee there is only one function of a particular
   // structure.
   llvm::FoldingSetNodeID ID;
+  ProvisionalKeyWatch KeyWatch;
   FunctionProtoType::Profile(ID, ResultTy, ArgArray.begin(), NumArgs, EPI,
                              *this);
+
+  assert((!KeyWatch.isProvisional() ||
+          EPI.ExceptionSpec.Type != EST_DependentNoexcept) &&
+         "FunctionProtoType key computed over an incompletely deserialized "
+         "ImplicitConceptSpecializationDecl, for a type whose canonical form "
+         "retains the noexcept expression");
 
   QualType Canonical;
   bool Unique = false;
 
   llvm::FoldingSetInsertToken Token;
   if (FunctionProtoType *FPT = FunctionProtoTypes.lookup(ID, Token)) {
+    assert(!KeyWatch.isProvisional() &&
+           "FunctionProtoType lookup hit on a key computed over an "
+           "incompletely deserialized ImplicitConceptSpecializationDecl; the "
+           "non-canonical FunctionProtoType would adopt the matched node's "
+           "canonical type");
     QualType Existing = QualType(FPT, 0);
 
     // If we find a pre-existing equivalent FunctionProtoType, we can just reuse
@@ -5203,6 +5267,11 @@ QualType ASTContext::getFunctionTypeInternal(
     FunctionProtoTypes.insert(FTP, Token);
   if (!EPI.FunctionEffects.empty())
     AnyFunctionEffects = true;
+
+  assert((!KeyWatch.isProvisional() || !Canonical.isNull()) &&
+         "canonical FunctionProtoType filed under a key computed over an "
+         "incompletely deserialized ImplicitConceptSpecializationDecl");
+
   return QualType(FTP, 0);
 }
 

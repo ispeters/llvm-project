@@ -1043,6 +1043,14 @@ struct ConceptSpecializationExprCollector
     Exprs.push_back(E);
     return true;
   }
+
+  bool VisitTemplateTypeParmDecl(TemplateTypeParmDecl *D) {
+    if (const TypeConstraint *TC = D->getTypeConstraint())
+      if (auto *CSE = dyn_cast_or_null<ConceptSpecializationExpr>(
+              TC->getImmediatelyDeclaredConstraint()))
+        Exprs.push_back(CSE);
+    return true;
+  }
 };
 
 } // namespace
@@ -1099,4 +1107,267 @@ TEST(ImplicitConceptSpecializationDecl, DeserializedWithNoArguments) {
   auto *D = ImplicitConceptSpecializationDecl::CreateDeserialized(
       AST->getASTContext(), GlobalDeclID(), /*NumTemplateArgs=*/0);
   EXPECT_TRUE(D->getTemplateArguments().empty());
+}
+
+namespace {
+
+/// StmtProfiler::VisitConceptSpecializationExpr() identifies an
+/// ImplicitConceptSpecializationDecl whose trailing arguments have not been
+/// deserialized yet by the fact that they are Null in every position -- see the
+/// FIXME in that class's EmptyShell constructor, and the assertions in
+/// ASTContext::getFunctionTypeInternal() that depend on it. That is only sound
+/// if a converted concept-id argument is never Null.
+///
+/// The cases below are the product of the two axes along which
+/// Sema::CheckTemplateArgumentList() builds a converted list from a written
+/// one, so that the coverage claim can be checked against that function rather
+/// than taken on faith:
+///
+///   * the kind of the concept's template parameter (type, non-type, template
+///     template, and packs of each). This does not map one-to-one onto
+///     TemplateArgument kinds: a class-type non-type parameter converts to a
+///     Declaration argument backed by a TemplateParamObjectDecl, the same kind
+///     a pointer parameter produces. See
+///     ObservedArgumentKindsCoverTheEnumeration for the kinds actually
+///     observed;
+///   * how each position is filled: written explicitly, supplied by default,
+///     deduced implicitly (the leading argument of a type-constraint), or
+///     absorbed into a pack, including an empty one.
+///
+/// Error recovery is sampled rather than enumerated; see
+/// ConvertedArgumentsSurviveErrorRecovery.
+class ConvertedConceptArguments : public ::testing::Test {
+protected:
+  std::unique_ptr<ASTUnit> AST;
+  ConceptSpecializationExprCollector Collector;
+
+  void parse(StringRef Code) {
+    AST = tooling::buildASTFromCodeWithArgs(Code, {"-std=c++20"});
+    ASSERT_TRUE(AST);
+    Collector.Exprs.clear();
+    Collector.TraverseDecl(AST->getASTContext().getTranslationUnitDecl());
+    ASSERT_FALSE(Collector.Exprs.empty())
+        << "no ConceptSpecializationExpr was produced; the test code is not "
+           "exercising what it claims to";
+  }
+
+  static void expectNoNull(ArrayRef<TemplateArgument> Args) {
+    for (const TemplateArgument &Arg : Args) {
+      EXPECT_FALSE(Arg.isNull())
+          << "a converted concept-id argument was Null; an unwritten argument "
+             "list is Null in every position, so this is what the detection in "
+             "StmtProfiler::VisitConceptSpecializationExpr uses to identify a "
+             "decl that has not been deserialized yet";
+      if (Arg.getKind() == TemplateArgument::Pack)
+        expectNoNull(Arg.pack_elements());
+    }
+  }
+
+  /// Checks the invariant on every specialization decl in the parse, and
+  /// additionally that no argument list is Null throughout -- the exact
+  /// condition StmtProfiler tests.
+  void expectInvariantHolds() {
+    for (const ConceptSpecializationExpr *E : Collector.Exprs) {
+      const auto *D = E->getSpecializationDecl();
+      ASSERT_NE(D, nullptr);
+      expectNoNull(D->getTemplateArguments());
+    }
+  }
+
+  llvm::DenseSet<int> observedKinds() {
+    llvm::DenseSet<int> Kinds;
+    for (const ConceptSpecializationExpr *E : Collector.Exprs)
+      if (const auto *D = E->getSpecializationDecl())
+        for (const TemplateArgument &Arg : D->getTemplateArguments()) {
+          Kinds.insert(Arg.getKind());
+          if (Arg.getKind() == TemplateArgument::Pack)
+            for (const TemplateArgument &Elem : Arg.pack_elements())
+              Kinds.insert(Elem.getKind());
+        }
+    return Kinds;
+  }
+};
+
+} // namespace
+
+// --- Axis 1: parameter kind ------------------------------------------------
+
+TEST_F(ConvertedConceptArguments, TypeParameter) {
+  parse(R"cpp(
+    template <class T> concept C = true;
+    static_assert(C<int>);
+  )cpp");
+  expectInvariantHolds();
+}
+
+TEST_F(ConvertedConceptArguments, IntegralNonTypeParameter) {
+  parse(R"cpp(
+    template <int N> concept C = N > 0;
+    static_assert(C<1>);
+  )cpp");
+  expectInvariantHolds();
+}
+
+TEST_F(ConvertedConceptArguments, PointerAndNullPtrNonTypeParameters) {
+  parse(R"cpp(
+    extern int G;
+    template <int *P> concept CPtr = true;
+    template <decltype(nullptr) P> concept CNull = true;
+    static_assert(CPtr<&G>);
+    static_assert(CNull<nullptr>);
+  )cpp");
+  expectInvariantHolds();
+}
+
+// A class-type non-type parameter. The converted argument is a Declaration
+// backed by a TemplateParamObjectDecl -- not a StructuralValue, which is not
+// reachable from a concept-id this way.
+TEST_F(ConvertedConceptArguments, ClassTypeNonTypeParameter) {
+  parse(R"cpp(
+    struct Val { int X; };
+    template <Val V> concept C = true;
+    static_assert(C<Val{1}>);
+  )cpp");
+  expectInvariantHolds();
+}
+
+TEST_F(ConvertedConceptArguments, TemplateTemplateParameter) {
+  parse(R"cpp(
+    template <class> struct S {};
+    template <template <class> class TT> concept C = true;
+    static_assert(C<S>);
+  )cpp");
+  expectInvariantHolds();
+}
+
+// A concept-id in a dependent context: the converted arguments are still
+// expressions rather than values.
+TEST_F(ConvertedConceptArguments, DependentArguments) {
+  parse(R"cpp(
+    template <int N> concept C = N > 0;
+    template <int N> void f() requires C<N> {}
+    void g() { f<1>(); }
+  )cpp");
+  expectInvariantHolds();
+}
+
+// --- Axis 2: how a position is filled --------------------------------------
+
+TEST_F(ConvertedConceptArguments, DefaultedParameter) {
+  // F<int> converts to {int, int}: the written list is shorter than the
+  // converted one.
+  parse(R"cpp(
+    template <class T> concept C = true;
+    template <class T, class U = int> concept F = C<U>;
+    static_assert(F<int>);
+  )cpp");
+  expectInvariantHolds();
+}
+
+TEST_F(ConvertedConceptArguments, ImplicitLeadingArgumentOfTypeConstraint) {
+  // The constraint on f's parameter converts to {T}, with the first argument
+  // supplied implicitly rather than written.
+  parse(R"cpp(
+    template <class T> concept C = true;
+    template <C T> void f(T);
+    void g() { f(0); }
+  )cpp");
+  expectInvariantHolds();
+}
+
+TEST_F(ConvertedConceptArguments, ParameterPack) {
+  parse(R"cpp(
+    template <class T> concept C = true;
+    template <class... Ts> concept E = (C<Ts> && ...);
+    static_assert(E<int, char, long>);
+  )cpp");
+  expectInvariantHolds();
+}
+
+// The closest a well-formed converted list gets to "nothing here": a Pack
+// argument with no elements. It is a Pack, not a Null.
+TEST_F(ConvertedConceptArguments, EmptyParameterPack) {
+  parse(R"cpp(
+    template <class... Ts> concept E = true;
+    static_assert(E<>);
+  )cpp");
+  expectInvariantHolds();
+}
+
+TEST_F(ConvertedConceptArguments, NestedConceptIdsGetTheirOwnDecls) {
+  parse(R"cpp(
+    template <class T> concept C = true;
+    template <class T, class U> concept D = C<T> && C<U>;
+    static_assert(D<int, char>);
+  )cpp");
+  expectInvariantHolds();
+}
+
+// --- Coverage --------------------------------------------------------------
+
+// Turns the enumeration above from a claim in a comment into something the
+// test verifies: if a future Clang stops producing one of these kinds for the
+// code below, the coverage assumed by the other tests has silently shrunk.
+TEST_F(ConvertedConceptArguments, ObservedArgumentKindsCoverTheEnumeration) {
+  parse(R"cpp(
+    extern int G;
+    template <class> struct S {};
+    struct Val { int X; };
+
+    template <class T> concept CType = true;
+    template <int N> concept CInt = N > 0;
+    template <int *P> concept CPtr = true;
+    template <Val V> concept CVal = true;
+    template <template <class> class TT> concept CTmpl = true;
+    template <class... Ts> concept CPack = true;
+
+    static_assert(CType<int>);
+    static_assert(CInt<1>);
+    static_assert(CPtr<&G>);
+    static_assert(CVal<Val{1}>);
+    static_assert(CTmpl<S>);
+    static_assert(CPack<int, char>);
+  )cpp");
+  expectInvariantHolds();
+
+  llvm::DenseSet<int> Kinds = observedKinds();
+  // StructuralValue is deliberately absent: CVal below is a class-type non-type
+  // parameter, and its converted argument is a Declaration backed by a
+  // TemplateParamObjectDecl. Declaration therefore covers both CPtr and CVal.
+  EXPECT_TRUE(Kinds.contains(TemplateArgument::Type));
+  EXPECT_TRUE(Kinds.contains(TemplateArgument::Integral));
+  EXPECT_TRUE(Kinds.contains(TemplateArgument::Declaration));
+  EXPECT_TRUE(Kinds.contains(TemplateArgument::Template));
+  EXPECT_TRUE(Kinds.contains(TemplateArgument::Pack));
+  EXPECT_FALSE(Kinds.contains(TemplateArgument::Null))
+      << "a converted concept-id argument was Null";
+}
+
+// --- Error recovery (sampled, not enumerated) ------------------------------
+
+// Whether a partially built converted list can ever be attached to an
+// ImplicitConceptSpecializationDecl is a question about Sema's recovery paths
+// that this test samples rather than settles. If any of these produce a decl
+// at all, its arguments must still satisfy the invariant.
+//
+// NOTE: this parse is expected to emit diagnostics, which will appear in the
+// test output. If buildASTFromCodeWithArgs returns null on a failed parse,
+// split this into per-case parses and skip the ones that do.
+TEST_F(ConvertedConceptArguments, ConvertedArgumentsSurviveErrorRecovery) {
+  AST = tooling::buildASTFromCodeWithArgs(R"cpp(
+    template <class T, class U> concept C = true;
+    template <int N> concept CInt = true;
+    struct Incomplete;
+
+    static_assert(C<int>);          // too few arguments
+    static_assert(C<int, int, int>);// too many arguments
+    static_assert(CInt<Incomplete>);// wrong argument kind
+  )cpp",
+                                          {"-std=c++20"});
+  if (!AST)
+    GTEST_SKIP() << "the ill-formed parse produced no AST";
+
+  Collector.Exprs.clear();
+  Collector.TraverseDecl(AST->getASTContext().getTranslationUnitDecl());
+  expectInvariantHolds();
 }
