@@ -21,6 +21,7 @@
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclFriend.h"
 #include "clang/AST/DeclarationName.h"
+#include "clang/AST/DeserializationTripwire.h"
 #include "clang/AST/Redeclarable.h"
 #include "clang/AST/TemplateBase.h"
 #include "clang/AST/Type.h"
@@ -1315,7 +1316,10 @@ public:
   /// Returns the type constraint associated with this template parameter (if
   /// any).
   const TypeConstraint *getTypeConstraint() const {
-    return TypeConstraintInitialized ? getTrailingObjects() : nullptr;
+    if (!TypeConstraintInitialized)
+      return nullptr;
+    CLANG_TRIPWIRE(this, 0, TemplateTypeParm_TypeConstraint);
+    return getTrailingObjects();
   }
 
   void setTypeConstraint(ConceptReference *CR,
@@ -1517,6 +1521,7 @@ public:
   /// pack.
   QualType getExpansionType(unsigned I) const {
     assert(I < NumExpandedTypes && "Out-of-range expansion type index");
+    CLANG_TRIPWIRE(this, 0, NTTP_ExpansionTypes);
     auto TypesAndInfos =
         getTrailingObjects<std::pair<QualType, TypeSourceInfo *>>();
     return TypesAndInfos[I].first;
@@ -1526,6 +1531,7 @@ public:
   /// expanded parameter pack.
   TypeSourceInfo *getExpansionTypeSourceInfo(unsigned I) const {
     assert(I < NumExpandedTypes && "Out-of-range expansion type index");
+    CLANG_TRIPWIRE(this, 0, NTTP_ExpansionTypes);
     auto TypesAndInfos =
         getTrailingObjects<std::pair<QualType, TypeSourceInfo *>>();
     return TypesAndInfos[I].second;
@@ -1534,6 +1540,7 @@ public:
   /// Return the constraint introduced by the placeholder type of this non-type
   /// template parameter (if any).
   Expr *getPlaceholderTypeConstraint() const {
+    CLANG_TRIPWIRE(this, 1, NTTP_PlaceholderConstraint);
     return hasPlaceholderTypeConstraint() ? *getTrailingObjects<Expr *>() :
         nullptr;
   }
@@ -1705,6 +1712,7 @@ public:
   /// pack.
   TemplateParameterList *getExpansionTemplateParameters(unsigned I) const {
     assert(I < NumExpandedParams && "Out-of-range expansion type index");
+    CLANG_TRIPWIRE(this, 0, TTP_ExpansionParams);
     return getTrailingObjects()[I];
   }
 
@@ -2535,6 +2543,7 @@ public:
   }
 
   ArrayRef<TemplateParameterList *> getTemplateParameterLists() const {
+    CLANG_TRIPWIRE(this, 0, FriendTemplate_ParameterLists);
     return ArrayRef(getTrailingObjects(), NumTPLists);
   }
 
@@ -3264,6 +3273,7 @@ public:
                      unsigned NumTemplateArgs);
 
   ArrayRef<TemplateArgument> getTemplateArguments() const {
+    CLANG_TRIPWIRE(this, 0, ICS_Args);
     return getTrailingObjects(NumTemplateArgs);
   }
   void setTemplateArguments(ArrayRef<TemplateArgument> Converted);
@@ -3596,6 +3606,7 @@ class ExplicitInstantiationDecl final
   const ASTTemplateArgumentListInfo *getTrailingArgsInfo() const {
     if (!hasTrailingArgsAsWritten())
       return nullptr;
+    CLANG_TRIPWIRE(this, 1, ExplicitInstantiation_ArgsAsWritten);
     return *getTrailingObjects<const ASTTemplateArgumentListInfo *>();
   }
 

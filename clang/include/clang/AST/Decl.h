@@ -19,6 +19,7 @@
 #include "clang/AST/DeclAccessPair.h"
 #include "clang/AST/DeclBase.h"
 #include "clang/AST/DeclarationName.h"
+#include "clang/AST/DeserializationTripwire.h"
 #include "clang/AST/ExternalASTSource.h"
 #include "clang/AST/NestedNameSpecifierBase.h"
 #include "clang/AST/Redeclarable.h"
@@ -188,7 +189,10 @@ public:
 
   PragmaMSCommentKind getCommentKind() const { return CommentKind; }
 
-  StringRef getArg() const { return getTrailingObjects(); }
+  StringRef getArg() const {
+    CLANG_TRIPWIRE(this, 0, PragmaComment_Arg);
+    return getTrailingObjects();
+  }
 
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
@@ -220,8 +224,14 @@ public:
   static PragmaDetectMismatchDecl *
   CreateDeserialized(ASTContext &C, GlobalDeclID ID, unsigned NameValueSize);
 
-  StringRef getName() const { return getTrailingObjects(); }
-  StringRef getValue() const { return getTrailingObjects() + ValueStart; }
+  StringRef getName() const {
+    CLANG_TRIPWIRE(this, 0, PragmaDetectMismatch_NameValue);
+    return getTrailingObjects();
+  }
+  StringRef getValue() const {
+    CLANG_TRIPWIRE(this, 0, PragmaDetectMismatch_NameValue);
+    return getTrailingObjects() + ValueStart;
+  }
 
   // Implement isa/cast/dyncast/etc.
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
@@ -5021,7 +5031,10 @@ private:
 
   explicit OutlinedFunctionDecl(DeclContext *DC, unsigned NumParams);
 
-  ImplicitParamDecl *const *getParams() const { return getTrailingObjects(); }
+  ImplicitParamDecl *const *getParams() const {
+    CLANG_TRIPWIRE(this, 0, OutlinedFunction_Params);
+    return getTrailingObjects();
+  }
 
   ImplicitParamDecl **getParams() { return getTrailingObjects(); }
 
@@ -5094,7 +5107,10 @@ private:
 
   explicit CapturedDecl(DeclContext *DC, unsigned NumParams);
 
-  ImplicitParamDecl *const *getParams() const { return getTrailingObjects(); }
+  ImplicitParamDecl *const *getParams() const {
+    CLANG_TRIPWIRE(this, 0, Captured_Params);
+    return getTrailingObjects();
+  }
 
   ImplicitParamDecl **getParams() { return getTrailingObjects(); }
 
@@ -5252,7 +5268,7 @@ public:
   /// identifiers aren't available.
   ArrayRef<SourceLocation> getIdentifierLocs() const;
 
-  SourceRange getSourceRange() const override LLVM_READONLY;
+  SourceRange getSourceRange() const override;
 
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
   static bool classofKind(Kind K) { return K == Import; }

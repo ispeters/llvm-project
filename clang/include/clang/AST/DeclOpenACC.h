@@ -16,6 +16,7 @@
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
+#include "clang/AST/DeserializationTripwire.h"
 #include "clang/AST/OpenACCClause.h"
 #include "clang/Basic/OpenACCKinds.h"
 #include "llvm/ADT/STLExtras.h"
@@ -59,7 +60,10 @@ public:
     return SourceRange(getLocation(), EndLoc);
   }
 
-  ArrayRef<const OpenACCClause *> clauses() const { return Clauses; }
+  ArrayRef<const OpenACCClause *> clauses() const {
+    CLANG_TRIPWIRE(this, 0, OpenACC_Clauses);
+    return Clauses;
+  }
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
   static bool classofKind(Kind K);
 };

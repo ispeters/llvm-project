@@ -20,6 +20,7 @@
 #include "clang/AST/CanonicalType.h"
 #include "clang/AST/DeclBase.h"
 #include "clang/AST/DeclCXX.h"
+#include "clang/AST/DeserializationTripwire.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DeclTemplate.h"
 #include "clang/AST/DeclarationName.h"
@@ -6140,12 +6141,16 @@ ArrayRef<SourceLocation> ImportDecl::getIdentifierLocs() const {
   if (!isImportComplete())
     return {};
 
+  CLANG_TRIPWIRE(this, 0, Import_IdentifierLocs);
+
   return getTrailingObjects(getNumModuleIdentifiers(getImportedModule()));
 }
 
 SourceRange ImportDecl::getSourceRange() const {
-  if (!isImportComplete())
+  if (!isImportComplete()) {
+    CLANG_TRIPWIRE(this, 0, Import_IdentifierLocs);
     return SourceRange(getLocation(), *getTrailingObjects());
+  }
 
   return SourceRange(getLocation(), getIdentifierLocs().back());
 }

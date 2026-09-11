@@ -1000,7 +1000,15 @@ void ASTContext::cleanup() {
   NoSanitizeL.reset();
 }
 
-ASTContext::~ASTContext() { cleanup(); }
+ASTContext::~ASTContext() {
+  // DIAGNOSTIC INSTRUMENTATION -- NOT FOR UPSTREAM. A slot still armed here was
+  // never disarmed, which means the tripwire has been reporting reads of an
+  // array that was in fact written. Catch the broken instrument rather than
+  // trusting its output. See DeserializationTripwire.h.
+  assert(TripwireArmedSlots.empty() &&
+         "trailing-object tripwire slot armed but never disarmed");
+  cleanup();
+}
 
 void ASTContext::setTraversalScope(const std::vector<Decl *> &TopLevelDecls) {
   TraversalScope = TopLevelDecls;

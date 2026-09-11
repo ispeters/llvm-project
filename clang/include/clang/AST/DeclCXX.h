@@ -19,6 +19,7 @@
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclBase.h"
 #include "clang/AST/DeclarationName.h"
+#include "clang/AST/DeserializationTripwire.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExternalASTSource.h"
 #include "clang/AST/LambdaCapture.h"
@@ -2662,6 +2663,7 @@ class CXXConstructorDecl final
   }
 
   ExplicitSpecifier getExplicitSpecifierInternal() const {
+    CLANG_TRIPWIRE(this, 1, CXXConstructor_ExplicitSpecifier);
     if (CXXConstructorDeclBits.HasTrailingExplicitSpecifier)
       return *getTrailingObjects<ExplicitSpecifier>();
     return ExplicitSpecifier(
@@ -2691,6 +2693,10 @@ public:
 
   static CXXConstructorDecl *CreateDeserialized(ASTContext &C, GlobalDeclID ID,
                                                 uint64_t AllocKind);
+
+  bool hasTrailingExplicitSpecifier() const {
+    return CXXConstructorDeclBits.HasTrailingExplicitSpecifier;
+  }
   static CXXConstructorDecl *
   Create(ASTContext &C, CXXRecordDecl *RD, SourceLocation StartLoc,
          const DeclarationNameInfo &NameInfo, QualType T, TypeSourceInfo *TInfo,
@@ -2874,6 +2880,7 @@ public:
 
   /// Get the constructor that this inheriting constructor is based on.
   InheritedConstructor getInheritedConstructor() const {
+    CLANG_TRIPWIRE(this, 0, CXXConstructor_InheritedConstructor);
     return isInheritingConstructor() ?
       *getTrailingObjects<InheritedConstructor>() : InheritedConstructor();
   }
@@ -3933,6 +3940,7 @@ public:
   /// Get the set of using declarations that this pack expanded into. Note that
   /// some of these may still be unresolved.
   ArrayRef<NamedDecl *> expansions() const {
+    CLANG_TRIPWIRE(this, 0, UsingPack_Expansions);
     return getTrailingObjects(NumExpansions);
   }
 
@@ -4316,6 +4324,7 @@ public:
 
   // Provide the range of bindings which may have a nested pack.
   ArrayRef<BindingDecl *> bindings() const {
+    CLANG_TRIPWIRE(this, 0, Decomposition_Bindings);
     return getTrailingObjects(NumBindings);
   }
 

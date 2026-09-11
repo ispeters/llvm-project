@@ -414,6 +414,24 @@ class ASTContext : public RefCountedBase<ASTContext> {
   /// vector deleting dtor.
   llvm::DenseSet<const CXXRecordDecl *> MaybeRequireVectorDeletingDtor;
 
+public:
+  /// The set of decls that are mid-deserialization; they've been constructed
+  /// and initialized, but they have trailing object arrays that have not been
+  /// filled in. CLANG_TRIPWIRE checks if a trailing object being read has been
+  /// initialized by consulting this set; if not, the read is noted and reported
+  /// at process exit.
+  ///
+  /// Decls have reference identity so their addresses are almost enough to
+  /// identify trailing object arrays; some decls have two trailing arrays, so
+  /// we use the low bit of the decl pointers as a tag to indicate which array
+  /// is being tracked. The context owns a bump allocator whose lifetime bounds
+  /// the lifetime of all decls in the context, so this set's lifetime needs to
+  /// match.
+  mutable llvm::SmallPtrSet<llvm::PointerIntPair<const Decl *, 1, unsigned>, 8>
+      TripwireArmedSlots;
+
+private:
+
   /// The next string literal "version" to allocate during constant evaluation.
   /// This is used to distinguish between repeated evaluations of the same
   /// string literal.

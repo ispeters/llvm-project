@@ -55,6 +55,7 @@ add_clang_library(clangAST
   DeclOpenMP.cpp
   DeclPrinter.cpp
   DeclTemplate.cpp
+  DeserializationTripwire.cpp
   DynamicRecursiveASTVisitor.cpp
   ParentMapContext.cpp
   Expr.cpp

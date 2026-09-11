@@ -21,6 +21,7 @@
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclBase.h"
 #include "clang/AST/DeclCXX.h"
+#include "clang/AST/DeserializationTripwire.h"
 #include "clang/AST/DeclFriend.h"
 #include "clang/AST/DeclObjC.h"
 #include "clang/AST/DeclOpenMP.h"
@@ -673,6 +674,7 @@ void ASTDeclReader::VisitPragmaCommentDecl(PragmaCommentDecl *D) {
   std::string Arg = readString();
   memcpy(D->getTrailingObjects(), Arg.data(), Arg.size());
   D->getTrailingObjects()[Arg.size()] = '\0';
+  tripwire::disarm(Reader.getContext(), D, 0);
 }
 
 void ASTDeclReader::VisitPragmaDetectMismatchDecl(PragmaDetectMismatchDecl *D) {
@@ -686,6 +688,7 @@ void ASTDeclReader::VisitPragmaDetectMismatchDecl(PragmaDetectMismatchDecl *D) {
   std::string Value = readString();
   memcpy(D->getTrailingObjects() + D->ValueStart, Value.data(), Value.size());
   D->getTrailingObjects()[D->ValueStart + Value.size()] = '\0';
+  tripwire::disarm(Reader.getContext(), D, 0);
 }
 
 void ASTDeclReader::VisitTranslationUnitDecl(TranslationUnitDecl *TU) {
@@ -1763,6 +1766,7 @@ void ASTDeclReader::VisitDecompositionDecl(DecompositionDecl *DD) {
     BDs[I] = readDeclAs<BindingDecl>();
     BDs[I]->setDecomposedDecl(DD);
   }
+  tripwire::disarm(Reader.getContext(), DD, 0);
 }
 
 void ASTDeclReader::VisitBindingDecl(BindingDecl *BD) {
@@ -1819,6 +1823,7 @@ void ASTDeclReader::VisitOutlinedFunctionDecl(OutlinedFunctionDecl *D) {
   VisitDecl(D);
   for (unsigned I = 0; I < D->NumParams; ++I)
     D->setParam(I, readDeclAs<ImplicitParamDecl>());
+  tripwire::disarm(Reader.getContext(), D, 0);
   D->setNothrow(Record.readInt() != 0);
   D->setBody(cast_or_null<Stmt>(Record.readStmt()));
 }
@@ -1834,6 +1839,7 @@ void ASTDeclReader::VisitCapturedDecl(CapturedDecl *CD) {
     else
       CD->setContextParam(I, readDeclAs<ImplicitParamDecl>());
   }
+  tripwire::disarm(Reader.getContext(), CD, 0);
 }
 
 void ASTDeclReader::VisitLinkageSpecDecl(LinkageSpecDecl *D) {
@@ -1932,6 +1938,7 @@ void ASTDeclReader::VisitUsingPackDecl(UsingPackDecl *D) {
   auto **Expansions = D->getTrailingObjects();
   for (unsigned I = 0; I != D->NumExpansions; ++I)
     Expansions[I] = readDeclAs<NamedDecl>();
+  tripwire::disarm(Reader.getContext(), D, 0);
   mergeMergeable(D);
 }
 
@@ -2351,11 +2358,13 @@ void ASTDeclReader::VisitCXXConstructorDecl(CXXConstructorDecl *D) {
   // We need the inherited constructor information to merge the declaration,
   // so we have to read it before we call VisitCXXMethodDecl.
   D->setExplicitSpecifier(Record.readExplicitSpec());
+  tripwire::disarm(Reader.getContext(), D, 1);
   if (D->isInheritingConstructor()) {
     auto *Shadow = readDeclAs<ConstructorUsingShadowDecl>();
     auto *Ctor = readDeclAs<CXXConstructorDecl>();
     *D->getTrailingObjects<InheritedConstructor>() =
         InheritedConstructor(Shadow, Ctor);
+    tripwire::disarm(Reader.getContext(), D, 0);
   }
 
   if (unsigned NumArgs = Record.readUInt32()) {
@@ -2414,6 +2423,7 @@ void ASTDeclReader::VisitImportDecl(ImportDecl *D) {
   auto *StoredLocs = D->getTrailingObjects();
   for (unsigned I = 0, N = Record.back(); I != N; ++I)
     StoredLocs[I] = readSourceLocation();
+  tripwire::disarm(Reader.getContext(), D, 0);
   Record.skipInts(1); // The number of stored source locations.
 }
 
@@ -2437,6 +2447,7 @@ void ASTDeclReader::VisitFriendTemplateDecl(FriendTemplateDecl *D) {
   VisitDecl(D);
   for (unsigned I = 0; I != D->NumTPLists; ++I)
     D->getTrailingObjects()[I] = Record.readTemplateParameterList();
+  tripwire::disarm(Reader.getContext(), D, 0);
   auto Kind = static_cast<FriendTemplateDeclKind>(Record.readInt());
   switch (Kind) {
   case FTDK_Type:
@@ -2484,6 +2495,7 @@ void ASTDeclReader::VisitImplicitConceptSpecializationDecl(
   for (unsigned I = 0; I < D->NumTemplateArgs; ++I)
     Args.push_back(Record.readTemplateArgument(/*Canonicalize=*/false));
   D->setTemplateArguments(Args);
+  tripwire::disarm(Reader.getContext(), D, 0);
 }
 
 void ASTDeclReader::VisitRequiresExprBodyDecl(RequiresExprBodyDecl *D) {
@@ -2766,6 +2778,10 @@ void ASTDeclReader::VisitTemplateTypeParmDecl(TemplateTypeParmDecl *D) {
     D->setTypeConstraint(CR, ImmediatelyDeclaredConstraint, ArgPackSubstIndex);
     D->NumExpanded = Record.readUnsignedOrNone();
   }
+  // Outside the branch on purpose: when hasTypeConstraint() is set but the
+  // record says the constraint was never initialized, the trailing object is
+  // never written and a disarm inside the branch would leak the slot.
+  tripwire::disarm(Reader.getContext(), D, 0);
 
   if (Record.readInt())
     D->setDefaultArgument(Reader.getContext(),
@@ -2777,8 +2793,14 @@ void ASTDeclReader::VisitNonTypeTemplateParmDecl(NonTypeTemplateParmDecl *D) {
   // TemplateParmPosition.
   D->setDepth(Record.readInt());
   D->setPosition(Record.readInt());
-  if (D->hasPlaceholderTypeConstraint())
+  if (D->hasPlaceholderTypeConstraint()) {
+    // Armed here rather than in armForDeserialization: whether this slot exists
+    // is derived from the decl's type, which VisitDeclaratorDecl set just above.
+    tripwire::arm(Reader.getContext(), D, 1,
+                  tripwire::NTTP_PlaceholderConstraint);
     D->setPlaceholderTypeConstraint(Record.readExpr());
+    tripwire::disarm(Reader.getContext(), D, 1);
+  }
   if (D->isExpandedParameterPack()) {
     auto TypesAndInfos =
         D->getTrailingObjects<std::pair<QualType, TypeSourceInfo *>>();
@@ -2786,6 +2808,7 @@ void ASTDeclReader::VisitNonTypeTemplateParmDecl(NonTypeTemplateParmDecl *D) {
       new (&TypesAndInfos[I].first) QualType(Record.readType());
       TypesAndInfos[I].second = readTypeSourceInfo();
     }
+    tripwire::disarm(Reader.getContext(), D, 0);
   } else {
     // Rest of NonTypeTemplateParmDecl.
     D->ParameterPack = Record.readInt();
@@ -2807,6 +2830,7 @@ void ASTDeclReader::VisitTemplateTemplateParmDecl(TemplateTemplateParmDecl *D) {
     for (unsigned I = 0, N = D->getNumExpansionTemplateParameters();
          I != N; ++I)
       Data[I] = Record.readTemplateParameterList();
+    tripwire::disarm(Reader.getContext(), D, 0);
   } else {
     // Rest of TemplateTemplateParmDecl.
     D->ParameterPack = Record.readInt();
@@ -2843,12 +2867,16 @@ void ASTDeclReader::VisitExplicitInstantiationDecl(
   D->SpecAndTSK.setInt(TSK);
   D->TypeAndFlags.setPointer(TSI); // preserves trailing flags in int bits
   // Read trailing objects.
-  if (D->hasTrailingQualifier())
+  if (D->hasTrailingQualifier()) {
     *D->getTrailingObjects<NestedNameSpecifierLoc>() =
         Record.readNestedNameSpecifierLoc();
-  if (D->hasTrailingArgsAsWritten())
+    tripwire::disarm(Reader.getContext(), D, 0);
+  }
+  if (D->hasTrailingArgsAsWritten()) {
     *D->getTrailingObjects<const ASTTemplateArgumentListInfo *>() =
         Record.readASTTemplateArgumentListInfo();
+    tripwire::disarm(Reader.getContext(), D, 1);
+  }
 
   // Rebuild the ASTContext map from specialization to EID.
   if (Spec)
@@ -3196,6 +3224,7 @@ void ASTDeclReader::VisitOpenACCDeclareDecl(OpenACCDeclareDecl *D) {
   D->DirectiveLoc = Record.readSourceLocation();
   D->EndLoc = Record.readSourceLocation();
   Record.readOpenACCClauseList(D->Clauses);
+  tripwire::disarm(Reader.getContext(), D, 0);
 }
 void ASTDeclReader::VisitOpenACCRoutineDecl(OpenACCRoutineDecl *D) {
   VisitDecl(D);
@@ -3205,6 +3234,7 @@ void ASTDeclReader::VisitOpenACCRoutineDecl(OpenACCRoutineDecl *D) {
   D->ParensLoc = Record.readSourceRange();
   D->FuncRef = Record.readExpr();
   Record.readOpenACCClauseList(D->Clauses);
+  tripwire::disarm(Reader.getContext(), D, 0);
 }
 
 //===----------------------------------------------------------------------===//
@@ -4369,6 +4399,13 @@ Decl *ASTReader::ReadDeclRecord(GlobalDeclID ID) {
   // calls to Decl::getASTContext() by Decl's methods will find the
   // TranslationUnitDecl without crashing.
   D->setDeclContext(Context.getTranslationUnitDecl());
+
+  // DIAGNOSTIC INSTRUMENTATION -- NOT FOR UPSTREAM. Arm here rather than in
+  // CreateDeserialized: this is the first point at which the decl has a
+  // DeclContext, and tripwire::isArmed needs one to reach the context that owns
+  // the armed set. It is also the correct scope -- CreateDeserialized is called
+  // directly by unit tests, whose decls never enter a deserialization window.
+  tripwire::armForDeserialization(Context, D);
 
   // Reading some declarations can result in deep recursion.
   runWithSufficientStackSpace(DeclLoc, [&] { Reader.Visit(D); });

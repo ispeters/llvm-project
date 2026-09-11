@@ -14,6 +14,7 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTMutationListener.h"
 #include "clang/AST/DeclCXX.h"
+#include "clang/AST/DeserializationTripwire.h"
 #include "clang/AST/DeclarationName.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
@@ -1902,6 +1903,7 @@ SourceLocation ExplicitInstantiationDecl::getTagKWLoc() const {
 }
 
 NestedNameSpecifierLoc ExplicitInstantiationDecl::getQualifierLoc() const {
+  CLANG_TRIPWIRE(this, 0, ExplicitInstantiation_QualifierLoc);
   if (hasTrailingQualifier())
     return *getTrailingObjects<NestedNameSpecifierLoc>();
   if (auto TL = getClassTypeLoc())
